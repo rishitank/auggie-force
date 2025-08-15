@@ -1,0 +1,37 @@
+name: Reusable - Augment Review (Strict)
+
+on:
+  workflow_call:
+    inputs:
+      custom_guidelines:
+        required: false
+        type: string
+      model:
+        required: false
+        type: string
+    secrets:
+      AUGMENT_SESSION_AUTH:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: augmentcode/review-pr@main
+        with:
+          augment_session_auth: ${{ secrets.AUGMENT_SESSION_AUTH }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          repo_name: ${{ github.repository }}
+          pull_number: ${{ github.event.pull_request.number }}
+          custom_guidelines: |
+            {% include "templates/base-guidelines.md" %}
+            {% include "templates/deep-guidelines.md" %}
+            Also treat warnings as failures and request changes on any security or test coverage regressions.
+        env:
+          AUGMENT_MODEL: ${{ inputs.model || vars.AUGMENT_MODEL || 'sonnet4' }}
+
