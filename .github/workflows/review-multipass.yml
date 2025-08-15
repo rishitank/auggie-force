@@ -20,6 +20,11 @@ permissions:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    outputs:
+      poem: ${{ steps.flags.outputs.poem }}
+      prompts: ${{ steps.flags.outputs.prompts }}
+      model: ${{ steps.size.outputs.model }}
+      size: ${{ steps.size.outputs.size }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,6 +37,36 @@ jobs:
           if [[ "${{ toJson(github.event.pull_request.labels.*.name) }}" == *"auggie:agent-prompts"* ]]; then PROMPTS=true; fi
           echo "poem=$POEM" >> $GITHUB_OUTPUT
           echo "prompts=$PROMPTS" >> $GITHUB_OUTPUT
+      - name: Compute PR size and model
+        id: size
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 300
+            });
+            const additions = files.reduce((a,f)=>a+(f.additions||0),0);
+            const deletions = files.reduce((a,f)=>a+(f.deletions||0),0);
+            const changed = files.length;
+            let size = 'small';
+            const delta = additions + deletions;
+            if (delta > 800 || changed > 60) size = 'large';
+            else if (delta > 200 || changed > 20) size = 'medium';
+            core.setOutput('size', size);
+            const modelSmall = process.env.AUGMENT_MODEL_SMALL || (process.env.AUGMENT_MODEL || 'sonnet4');
+            const modelMed = process.env.AUGMENT_MODEL_MEDIUM || (process.env.AUGMENT_MODEL || 'sonnet4');
+            const modelLarge = process.env.AUGMENT_MODEL_LARGE || (process.env.AUGMENT_MODEL || 'sonnet4');
+            const model = size === 'small' ? modelSmall : size === 'medium' ? modelMed : modelLarge;
+            core.setOutput('model', model);
+        env:
+          AUGMENT_MODEL: ${{ vars.AUGMENT_MODEL }}
+          AUGMENT_MODEL_SMALL: ${{ vars.AUGMENT_MODEL_SMALL }}
+          AUGMENT_MODEL_MEDIUM: ${{ vars.AUGMENT_MODEL_MEDIUM }}
+          AUGMENT_MODEL_LARGE: ${{ vars.AUGMENT_MODEL_LARGE }}
 
   lint_security_deep:
     runs-on: ubuntu-latest
@@ -67,7 +102,7 @@ jobs:
             {% include "templates/agent-prompts.md" %}
             {% endif %}
         env:
-          AUGMENT_MODEL: ${{ vars.AUGMENT_MODEL || 'gpt-4.1' }}
+          AUGMENT_MODEL: ${{ needs.prepare.outputs.model || vars.AUGMENT_MODEL || 'sonnet4' }}
 
   summarize:
     runs-on: ubuntu-latest
