@@ -1,0 +1,26 @@
+name: Augment Review (On-Demand)
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  on_demand:
+    if: contains(github.event.pull_request.labels.*.name, 'augment_review')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: augmentcode/review-pr@main
+        with:
+          augment_session_auth: ${{ secrets.AUGMENT_SESSION_AUTH || secrets.AUGMENT_API_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          repo_name: ${{ github.repository }}
+          pull_number: ${{ github.event.pull_request.number }}
+          custom_guidelines: |
+            {% include "templates/base-guidelines.md" %}
+            {% include "templates/deep-guidelines.md" %}
+
