@@ -109,6 +109,12 @@ jobs:
     needs: lint_security_deep
     if: always()
     steps:
+      - name: Upload review metadata (placeholder)
+        uses: actions/upload-artifact@v4
+        with:
+          name: augment-review-${{ github.event.pull_request.number }}-${{ matrix.pass }}
+          path: ${{ github.workspace }}
+        if-no-files-found: ignore
       - name: Succeed if only advisory issues
         run: |
           echo "This step can parse artifacts or check labels to determine final gate. Placeholder for now."
