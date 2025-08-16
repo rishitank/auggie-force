@@ -62,6 +62,14 @@ jobs:
             const modelLarge = process.env.AUGMENT_MODEL_LARGE || (process.env.AUGMENT_MODEL || 'sonnet4');
             const model = size === 'small' ? modelSmall : size === 'medium' ? modelMed : modelLarge;
             core.setOutput('model', model);
+            // Language flags
+            const exts = files.map(f=>f.filename).map(n=>n.split('/').pop()).map(n=>n||'');
+            const has = (re) => files.some(f => re.test(f.filename));
+            core.setOutput('has_js', String(has(/\.(mjs|cjs|js|jsx)$/)));
+            core.setOutput('has_ts', String(has(/\.(ts|tsx)$/)));
+            core.setOutput('has_py', String(has(/\.py$/)));
+            core.setOutput('has_java', String(has(/\.java$/)));
+            core.setOutput('has_go', String(has(/\.go$/)));
         env:
           AUGMENT_MODEL: ${{ vars.AUGMENT_MODEL }}
           AUGMENT_MODEL_SMALL: ${{ vars.AUGMENT_MODEL_SMALL }}
@@ -106,12 +114,12 @@ jobs:
             {% else %}
             {% include "templates/deep-guidelines.md" %}
             {% endif %}
-            {# Language-aware guidance (model should apply only to relevant files) #}
-            {% include "templates/lang-js.md" %}
-            {% include "templates/lang-ts.md" %}
-            {% include "templates/lang-py.md" %}
-            {% include "templates/lang-java.md" %}
-            {% include "templates/lang-go.md" %}
+            {# Language-aware guidance #}
+            {% if needs.prepare.outputs.has_js == 'true' %}{% include "templates/lang-js.md" %}{% endif %}
+            {% if needs.prepare.outputs.has_ts == 'true' %}{% include "templates/lang-ts.md" %}{% endif %}
+            {% if needs.prepare.outputs.has_py == 'true' %}{% include "templates/lang-py.md" %}{% endif %}
+            {% if needs.prepare.outputs.has_java == 'true' %}{% include "templates/lang-java.md" %}{% endif %}
+            {% if needs.prepare.outputs.has_go == 'true' %}{% include "templates/lang-go.md" %}{% endif %}
             {% if needs.prepare.outputs.poem == 'true' %}
             {% include "templates/poem.md" %}
             {% endif %}
