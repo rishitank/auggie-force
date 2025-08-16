@@ -118,6 +118,9 @@ jobs:
             {% if needs.prepare.outputs.has_js == 'true' %}{% include "templates/lang-js.md" %}{% endif %}
             {% if needs.prepare.outputs.has_ts == 'true' %}{% include "templates/lang-ts.md" %}{% endif %}
             {% if needs.prepare.outputs.has_py == 'true' %}{% include "templates/lang-py.md" %}{% endif %}
+            {% if contains(github.event.pull_request.labels.*.name, 'auggie:auto-resolve') %}
+            Resolve any open discussion threads that have been addressed in this revision. Only resolve threads where the referenced lines are unchanged or the suggestion has been applied.
+            {% endif %}
             {% if needs.prepare.outputs.has_java == 'true' %}{% include "templates/lang-java.md" %}{% endif %}
             {% if needs.prepare.outputs.has_go == 'true' %}{% include "templates/lang-go.md" %}{% endif %}
             {% if needs.prepare.outputs.poem == 'true' %}
