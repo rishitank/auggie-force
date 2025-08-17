@@ -1,0 +1,54 @@
+name: Auggie Commands
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  dispatch:
+    if: github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse command
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.comment.body.trim();
+            const m = body.match(/^\/(auggie|augment)\s+(\S+)(.*)$/i);
+            if (!m) { core.setOutput('cmd',''); return; }
+            core.setOutput('cmd', m[2].toLowerCase());
+            core.setOutput('args', (m[3]||'').trim());
+      - name: Handle commands
+        if: steps.parse.outputs.cmd != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const cmd = core.getInput('cmd') || '${{ steps.parse.outputs.cmd }}';
+            const args = core.getInput('args') || '${{ steps.parse.outputs.args }}';
+            const owner = context.repo.owner; const repo = context.repo.repo; const issue_number = context.issue.number;
+            async function addLabel(lbl){ try{ await github.rest.issues.addLabels({owner,repo,issue_number,labels:[lbl]}); }catch(e){} }
+            switch(cmd){
+              case 'recheck': await addLabel('augment_review'); break;
+              case 'poem': await addLabel('auggie:poem'); break;
+              case 'prompts': await addLabel('auggie:agent-prompts'); break;
+              case 'enhance-pr': await addLabel('auggie:enhance-pr'); break;
+              case 'resolve': {
+                // Resolve comment thread where the command is posted
+                const comment_id = context.payload.comment.id;
+                try { await github.rest.pulls.updateReviewComment({owner, repo, comment_id, body: context.payload.comment.body, position: undefined}); } catch(e){}
+                break;
+              }
+              case 'resolve-all': {
+                // Add label; multipass can optionally auto-resolve when clean
+                await addLabel('auggie:auto-resolve');
+                break;
+              }
+            }
+            await github.rest.reactions.createForIssueComment({owner, repo, comment_id: context.payload.comment.id, content: '+1'});
+

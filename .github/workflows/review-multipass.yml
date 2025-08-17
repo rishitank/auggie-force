@@ -20,6 +20,11 @@ permissions:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    outputs:
+      poem: ${{ steps.flags.outputs.poem }}
+      prompts: ${{ steps.flags.outputs.prompts }}
+      model: ${{ steps.size.outputs.model }}
+      size: ${{ steps.size.outputs.size }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,6 +37,44 @@ jobs:
           if [[ "${{ toJson(github.event.pull_request.labels.*.name) }}" == *"auggie:agent-prompts"* ]]; then PROMPTS=true; fi
           echo "poem=$POEM" >> $GITHUB_OUTPUT
           echo "prompts=$PROMPTS" >> $GITHUB_OUTPUT
+      - name: Compute PR size and model
+        id: size
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 300
+            });
+            const additions = files.reduce((a,f)=>a+(f.additions||0),0);
+            const deletions = files.reduce((a,f)=>a+(f.deletions||0),0);
+            const changed = files.length;
+            let size = 'small';
+            const delta = additions + deletions;
+            if (delta > 800 || changed > 60) size = 'large';
+            else if (delta > 200 || changed > 20) size = 'medium';
+            core.setOutput('size', size);
+            const modelSmall = process.env.AUGMENT_MODEL_SMALL || (process.env.AUGMENT_MODEL || 'sonnet4');
+            const modelMed = process.env.AUGMENT_MODEL_MEDIUM || (process.env.AUGMENT_MODEL || 'sonnet4');
+            const modelLarge = process.env.AUGMENT_MODEL_LARGE || (process.env.AUGMENT_MODEL || 'sonnet4');
+            const model = size === 'small' ? modelSmall : size === 'medium' ? modelMed : modelLarge;
+            core.setOutput('model', model);
+            // Language flags
+            const exts = files.map(f=>f.filename).map(n=>n.split('/').pop()).map(n=>n||'');
+            const has = (re) => files.some(f => re.test(f.filename));
+            core.setOutput('has_js', String(has(/\.(mjs|cjs|js|jsx)$/)));
+            core.setOutput('has_ts', String(has(/\.(ts|tsx)$/)));
+            core.setOutput('has_py', String(has(/\.py$/)));
+            core.setOutput('has_java', String(has(/\.java$/)));
+            core.setOutput('has_go', String(has(/\.go$/)));
+        env:
+          AUGMENT_MODEL: ${{ vars.AUGMENT_MODEL }}
+          AUGMENT_MODEL_SMALL: ${{ vars.AUGMENT_MODEL_SMALL }}
+          AUGMENT_MODEL_MEDIUM: ${{ vars.AUGMENT_MODEL_MEDIUM }}
+          AUGMENT_MODEL_LARGE: ${{ vars.AUGMENT_MODEL_LARGE }}
 
   lint_security_deep:
     runs-on: ubuntu-latest
@@ -45,6 +88,17 @@ jobs:
         uses: actions/checkout@v4
       - name: Augment Review PR
         uses: augmentcode/review-pr@main
+      - name: Enhance PR description (optional)
+        if: contains(github.event.pull_request.labels.*.name, 'auggie:enhance-pr') || matrix.pass == 'deep'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number });
+            const title = pr.title;
+            const body = pr.body || '';
+            const newBody = body + `\n\n---\n` +
+              `## Auggie Summary\n- Key changes: (generated)\n- Risks: (generated)\n- Test plan: (generated)\n- Rollout/rollback: (generated)\n`;
+            await github.rest.pulls.update({ owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number, title, body: newBody });
         with:
           augment_session_auth: ${{ secrets.AUGMENT_SESSION_AUTH || secrets.AUGMENT_API_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -60,6 +114,15 @@ jobs:
             {% else %}
             {% include "templates/deep-guidelines.md" %}
             {% endif %}
+            {# Language-aware guidance #}
+            {% if needs.prepare.outputs.has_js == 'true' %}{% include "templates/lang-js.md" %}{% endif %}
+            {% if needs.prepare.outputs.has_ts == 'true' %}{% include "templates/lang-ts.md" %}{% endif %}
+            {% if needs.prepare.outputs.has_py == 'true' %}{% include "templates/lang-py.md" %}{% endif %}
+            {% if contains(github.event.pull_request.labels.*.name, 'auggie:auto-resolve') %}
+            Resolve any open discussion threads that have been addressed in this revision. Only resolve threads where the referenced lines are unchanged or the suggestion has been applied.
+            {% endif %}
+            {% if needs.prepare.outputs.has_java == 'true' %}{% include "templates/lang-java.md" %}{% endif %}
+            {% if needs.prepare.outputs.has_go == 'true' %}{% include "templates/lang-go.md" %}{% endif %}
             {% if needs.prepare.outputs.poem == 'true' %}
             {% include "templates/poem.md" %}
             {% endif %}
@@ -67,13 +130,19 @@ jobs:
             {% include "templates/agent-prompts.md" %}
             {% endif %}
         env:
-          AUGMENT_MODEL: ${{ vars.AUGMENT_MODEL || 'gpt-4.1' }}
+          AUGMENT_MODEL: ${{ needs.prepare.outputs.model || vars.AUGMENT_MODEL || 'sonnet4' }}
 
   summarize:
     runs-on: ubuntu-latest
     needs: lint_security_deep
     if: always()
     steps:
+      - name: Upload review metadata (placeholder)
+        uses: actions/upload-artifact@v4
+        with:
+          name: augment-review-${{ github.event.pull_request.number }}-${{ matrix.pass }}
+          path: ${{ github.workspace }}
+        if-no-files-found: ignore
       - name: Succeed if only advisory issues
         run: |
           echo "This step can parse artifacts or check labels to determine final gate. Placeholder for now."
