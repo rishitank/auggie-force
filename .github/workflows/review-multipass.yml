@@ -2,14 +2,15 @@ name: Augment Review (Multi-Pass)
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  pull_request_target:
-    types: [labeled]
-    # Only allow safe label triggers
-    branches: [ main, master ]
+    # `labeled` re-runs the review when the auggie:poem or
+    # auggie:agent-prompts label is added. This used to come in through
+    # pull_request_target, which runs with secrets while review-pr checks out
+    # the PR head; plain pull_request keeps untrusted fork code away from
+    # secrets (fork PRs are simply not reviewed).
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
 
 concurrency:
-  group: augment-review-${{ github.event.pull_request.number || github.sha }}
+  group: augment-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -20,18 +21,25 @@ permissions:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    # Declared so the review jobs can read them; before, they were never
+    # exported and always came through empty.
+    outputs:
+      poem: ${{ steps.flags.outputs.poem }}
+      prompts: ${{ steps.flags.outputs.prompts }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
       - name: Infer flags
         id: flags
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
-          POEM=false
-          PROMPTS=false
-          if [[ "${{ toJson(github.event.pull_request.labels.*.name) }}" == *"auggie:poem"* ]]; then POEM=true; fi
-          if [[ "${{ toJson(github.event.pull_request.labels.*.name) }}" == *"auggie:agent-prompts"* ]]; then PROMPTS=true; fi
-          echo "poem=$POEM" >> $GITHUB_OUTPUT
-          echo "prompts=$PROMPTS" >> $GITHUB_OUTPUT
+          poem=false
+          prompts=false
+          case "${LABELS}" in *'"auggie:poem"'*) poem=true ;; esac
+          case "${LABELS}" in *'"auggie:agent-prompts"'*) prompts=true ;; esac
+          {
+            echo "poem=${poem}"
+            echo "prompts=${prompts}"
+          } >> "$GITHUB_OUTPUT"
 
   lint_security_deep:
     runs-on: ubuntu-latest
@@ -40,34 +48,58 @@ jobs:
       fail-fast: false
       matrix:
         pass: [lint, security, deep]
+    env:
+      # Secrets cannot be read in `if:`, so expose only whether one is set.
+      HAS_AUGMENT_AUTH: ${{ secrets.AUGMENT_SESSION_AUTH != '' || secrets.AUGMENT_API_TOKEN != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Actions never rendered the Jinja-style {% include %} blocks this used
+      # to pass, so the review received them as literal text. Build the
+      # guidelines from templates/ for this pass instead.
+      - name: Compose guidelines
+        id: guidelines
+        env:
+          PASS: ${{ matrix.pass }}
+          POEM: ${{ needs.prepare.outputs.poem }}
+          PROMPTS: ${{ needs.prepare.outputs.prompts }}
+        run: |
+          set -euo pipefail
+          files=(templates/base-guidelines.md)
+          case "${PASS}" in
+            lint) files+=(templates/lint-guidelines.md) ;;
+            security) files+=(templates/security-guidelines.md) ;;
+            *) files+=(templates/deep-guidelines.md) ;;
+          esac
+          if [ "${POEM}" = "true" ]; then files+=(templates/poem.md); fi
+          if [ "${PROMPTS}" = "true" ]; then files+=(templates/agent-prompts.md); fi
+          delimiter="GUIDELINES_$(openssl rand -hex 8)"
+          {
+            echo "text<<${delimiter}"
+            for f in "${files[@]}"; do
+              cat "${f}"
+              echo
+            done
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Augment Review PR
-        uses: augmentcode/review-pr@main
+        if: env.HAS_AUGMENT_AUTH == 'true'
+        # v0, the release line the other repos use, instead of the moving main branch.
+        uses: augmentcode/review-pr@v0
         with:
           augment_session_auth: ${{ secrets.AUGMENT_SESSION_AUTH || secrets.AUGMENT_API_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           repo_name: ${{ github.repository }}
           pull_number: ${{ github.event.pull_request.number }}
-          custom_guidelines: |
-            {% set PASS = matrix.pass %}
-            {% include "templates/base-guidelines.md" %}
-            {% if PASS == 'lint' %}
-            {% include "templates/lint-guidelines.md" %}
-            {% elif PASS == 'security' %}
-            {% include "templates/security-guidelines.md" %}
-            {% else %}
-            {% include "templates/deep-guidelines.md" %}
-            {% endif %}
-            {% if needs.prepare.outputs.poem == 'true' %}
-            {% include "templates/poem.md" %}
-            {% endif %}
-            {% if needs.prepare.outputs.prompts == 'true' %}
-            {% include "templates/agent-prompts.md" %}
-            {% endif %}
+          custom_guidelines: ${{ steps.guidelines.outputs.text }}
         env:
           AUGMENT_MODEL: ${{ vars.AUGMENT_MODEL || 'gpt-4.1' }}
+
+      - name: Note skipped review
+        if: env.HAS_AUGMENT_AUTH != 'true'
+        run: echo "::notice title=Augment review skipped::Neither AUGMENT_SESSION_AUTH nor AUGMENT_API_TOKEN is set."
 
   summarize:
     runs-on: ubuntu-latest
@@ -77,4 +109,3 @@ jobs:
       - name: Succeed if only advisory issues
         run: |
           echo "This step can parse artifacts or check labels to determine final gate. Placeholder for now."
-

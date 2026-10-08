@@ -14,13 +14,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: augmentcode/review-pr@main
+
+      # Actions never rendered the Jinja-style {% include %} blocks this used
+      # to pass, so the review received them as literal text. Build the same
+      # guidelines (base + deep) from templates/ instead.
+      - name: Compose guidelines
+        id: guidelines
+        run: |
+          set -euo pipefail
+          delimiter="GUIDELINES_$(openssl rand -hex 8)"
+          {
+            echo "text<<${delimiter}"
+            for f in templates/base-guidelines.md templates/deep-guidelines.md; do
+              cat "${f}"
+              echo
+            done
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+      # v0, the release line the other repos use, instead of the moving main branch.
+      - uses: augmentcode/review-pr@v0
         with:
           augment_session_auth: ${{ secrets.AUGMENT_SESSION_AUTH || secrets.AUGMENT_API_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           repo_name: ${{ github.repository }}
           pull_number: ${{ github.event.pull_request.number }}
-          custom_guidelines: |
-            {% include "templates/base-guidelines.md" %}
-            {% include "templates/deep-guidelines.md" %}
-
+          custom_guidelines: ${{ steps.guidelines.outputs.text }}
